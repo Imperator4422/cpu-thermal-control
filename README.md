@@ -1,6 +1,6 @@
 # cpu-thermal-control
 
-Use CPU load to approach a target temperature with proportional control. Requires
+Use CPU load to approach a target temperature with proportional-integral control. Requires
 Linux and Python 3.11 or newer; there are no external dependencies.
 
 Edit `config.toml` and run:
@@ -30,12 +30,15 @@ Configuration keys:
 | `load_period` | 0.25 | Seconds per worker's load duty cycle. |
 | `workers` | Available CPUs | Number of load processes; defaults to the process's CPU affinity count. |
 | `sensor_path` | Automatic | Optional path to one CPU temperature sensor. |
+| `log_to_console` | true | Print sensor and periodic status to the console; errors are still reported when disabled. |
 
 Load is `clamp(gain * error + integral_gain * accumulated_error, 0, 1)` per
 worker, where `error = target_c - measured_c` and accumulated error is the
 time-integral of the temperature error in degree-seconds. Integral accumulation
 is paused when the load is saturated and the error would push it farther into
-saturation. The controller can add heat but cannot cool the CPU below its idle
+saturation. Console status shows the signed, unclamped proportional and integral
+contributions as percentages alongside the clamped total load.
+The controller can add heat but cannot cool the CPU below its idle
 temperature. Other workloads, cooling, frequency scaling, and thermal
 throttling affect the result.
 Monitor the machine and choose a safe target for your hardware; this is not a

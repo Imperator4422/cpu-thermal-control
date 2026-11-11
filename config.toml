@@ -3,6 +3,7 @@ gain = 0.05
 integral_gain = 0.001
 sample_interval = 5.0
 load_period = 0.005
+log_to_console = true
 
 # workers = 4
 sensor_path = "/sys/class/hwmon/hwmon0/temp1_input"
