@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 import thermal_control as control
 
@@ -24,6 +25,16 @@ class ProportionalControlTests(unittest.TestCase):
                     path.write_text(content)
                     with self.assertRaises(ValueError):
                         control.load_config(path)
+
+
+class WorkerLifecycleTests(unittest.TestCase):
+    def test_parent_death_signal_is_installed_before_parent_check(self):
+        prctl = Mock(return_value=0)
+        with patch("thermal_control.ctypes.CDLL") as cdll, \
+                patch("thermal_control.os.getppid", return_value=123):
+            cdll.return_value.prctl = prctl
+            self.assertTrue(control._set_parent_death_signal(123))
+        prctl.assert_called_once_with(control._PR_SET_PDEATHSIG, control.signal.SIGTERM, 0, 0, 0)
 
 
 class SensorTests(unittest.TestCase):

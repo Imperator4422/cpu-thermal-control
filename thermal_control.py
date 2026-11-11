@@ -2,6 +2,7 @@
 """Maintain a CPU temperature by varying the amount of CPU work."""
 
 import argparse
+import ctypes
 from dataclasses import dataclass
 import math
 import multiprocessing
@@ -11,6 +12,9 @@ import signal
 import sys
 import time
 import tomllib
+
+
+_PR_SET_PDEATHSIG = 1
 
 
 @dataclass(frozen=True)
@@ -120,21 +124,34 @@ def proportional_load(target_c, temperature_c, gain):
     return max(0.0, min(1.0, gain * (target_c - temperature_c)))
 
 
+def _set_parent_death_signal(parent_pid):
+    libc = ctypes.CDLL(None, use_errno=True)
+    prctl = libc.prctl
+    prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+    prctl.restype = ctypes.c_int
+    if prctl(_PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0) == -1:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    return os.getppid() == parent_pid
+
+
 def load_worker(duty, stop, period, parent_pid):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-    while not stop.is_set() and os.getppid() == parent_pid:
+    if not _set_parent_death_signal(parent_pid):
+        return
+    while not stop.is_set():
         with duty.get_lock():
             fraction = duty.value
         start = time.monotonic()
         now = start
-        while now < start + fraction * period and not stop.is_set() and os.getppid() == parent_pid:
+        while now < start + fraction * period and not stop.is_set():
             refresh = now + 0.05
             while time.monotonic() < min(refresh, start + fraction * period):
                 pass
             with duty.get_lock():
                 fraction = duty.value
             now = time.monotonic()
-        while now < start + period and os.getppid() == parent_pid:
+        while now < start + period:
             if stop.wait(min(0.1, start + period - now)):
                 return
             now = time.monotonic()
@@ -143,12 +160,13 @@ def load_worker(duty, stop, period, parent_pid):
 def run(config):
     sensors = [Path(config.sensor_path)] if config.sensor_path else discover_sensors()
     print("CPU sensor(s): " + ", ".join(map(str, sensors)), flush=True)
-    duty = multiprocessing.Value("d", 0.0)
-    stop = multiprocessing.Event()
+    context = multiprocessing.get_context("fork")
+    duty = context.Value("d", 0.0)
+    stop = context.Event()
     workers = []
     try:
         for _ in range(config.workers):
-            worker = multiprocessing.Process(
+            worker = context.Process(
                 target=load_worker, args=(duty, stop, config.load_period, os.getpid()))
             worker.start()
             workers.append(worker)
