@@ -26,6 +26,7 @@ class Config:
     load_period: float
     workers: int
     sensor_path: str | None
+    log_to_console: bool = True
 
 
 def available_cpus():
@@ -39,7 +40,7 @@ def load_config(path):
         data = tomllib.load(file)
     allowed = {
         "target_c", "gain", "integral_gain", "sample_interval", "load_period",
-        "workers", "sensor_path",
+        "workers", "sensor_path", "log_to_console",
     }
     unknown = data.keys() - allowed
     if unknown:
@@ -69,7 +70,11 @@ def load_config(path):
     sensor_path = data.get("sensor_path")
     if sensor_path is not None and (not isinstance(sensor_path, str) or not sensor_path):
         raise ValueError("sensor_path must be a non-empty string")
-    return Config(target, gain, integral_gain, sample_interval, load_period, workers, sensor_path)
+    log_to_console = data.get("log_to_console", True)
+    if not isinstance(log_to_console, bool):
+        raise ValueError(f"invalid log_to_console: {log_to_console!r}")
+    return Config(target, gain, integral_gain, sample_interval, load_period, workers, sensor_path,
+                  log_to_console)
 
 
 def _read_text(path):
@@ -187,7 +192,8 @@ def load_worker(duty, stop, period, parent_pid):
 
 def run(config):
     sensors = [Path(config.sensor_path)] if config.sensor_path else discover_sensors()
-    print("CPU sensor(s): " + ", ".join(map(str, sensors)), flush=True)
+    if config.log_to_console:
+        print("CPU sensor(s): " + ", ".join(map(str, sensors)), flush=True)
     controller = PIController(config.gain, config.integral_gain)
     context = multiprocessing.get_context("fork")
     duty = context.Value("d", 0.0)
@@ -209,8 +215,12 @@ def run(config):
             last_sample = now
             with duty.get_lock():
                 duty.value = fraction
-            print(f"CPU: {temperature:.1f} C  target: {config.target_c:.1f} C  load: {fraction:.0%}",
-                  flush=True)
+            if config.log_to_console:
+                proportional = config.gain * (config.target_c - temperature)
+                integral = config.integral_gain * controller.integral_error
+                print(f"CPU: {temperature:.1f} C  target: {config.target_c:.1f} C"
+                      f"  load: {fraction:.0%}  proportional: {proportional:.1%}"
+                      f"  integral: {integral:.1%}", flush=True)
             time.sleep(config.sample_interval)
     finally:
         stop.set()

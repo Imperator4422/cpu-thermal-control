@@ -1,7 +1,8 @@
+import io
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import thermal_control as control
 
@@ -20,10 +21,14 @@ class ProportionalControlTests(unittest.TestCase):
             config = control.load_config(path)
             self.assertEqual((config.target_c, config.workers, config.sensor_path), (70, 2, "/tmp/cpu"))
             self.assertEqual(config.integral_gain, 0.001)
+            self.assertTrue(config.log_to_console)
             path.write_text('integral_gain = 0\n')
             self.assertEqual(control.load_config(path).integral_gain, 0)
+            path.write_text('log_to_console = false\n')
+            self.assertFalse(control.load_config(path).log_to_console)
             for content in ('workers = 0', 'gain = nan', 'sample_interval = 0',
-                            'target_c = 121', 'sensor_path = ""', 'unknown = 1'):
+                            'target_c = 121', 'sensor_path = ""', 'unknown = 1',
+                            'log_to_console = 1', 'log_to_console = "false"'):
                 with self.subTest(content=content):
                     path.write_text(content)
                     with self.assertRaises(ValueError):
@@ -62,6 +67,33 @@ class WorkerLifecycleTests(unittest.TestCase):
             cdll.return_value.prctl = prctl
             self.assertTrue(control._set_parent_death_signal(123))
         prctl.assert_called_once_with(control._PR_SET_PDEATHSIG, control.signal.SIGTERM, 0, 0, 0)
+
+
+class ConsoleLoggingTests(unittest.TestCase):
+    def test_status_reports_pi_contributions_and_can_be_disabled(self):
+        for enabled in (True, False):
+            with self.subTest(enabled=enabled):
+                config = control.Config(75, 0.05, 0.01, 1, 0.25, 1, "/tmp/cpu", enabled)
+                context = MagicMock()
+                context.Process.return_value.is_alive.return_value = True
+                output = io.StringIO()
+                with patch("thermal_control.multiprocessing.get_context", return_value=context), \
+                        patch("thermal_control.read_temperature", side_effect=[65, 85]), \
+                        patch("thermal_control.time.monotonic", side_effect=[0, 2, 4]), \
+                        patch("thermal_control.time.sleep", side_effect=[None, KeyboardInterrupt]), \
+                        patch("sys.stdout", output):
+                    with self.assertRaises(KeyboardInterrupt):
+                        control.run(config)
+                self.assertEqual(context.Value.return_value.value, 0)
+                context.Event.return_value.set.assert_called_once()
+                if enabled:
+                    self.assertIn("CPU sensor(s): /tmp/cpu", output.getvalue())
+                    self.assertIn("load: 70%  proportional: 50.0%  integral: 20.0%",
+                                  output.getvalue())
+                    self.assertIn("load: 0%  proportional: -50.0%  integral: 20.0%",
+                                  output.getvalue())
+                else:
+                    self.assertEqual(output.getvalue(), "")
 
 
 class SensorTests(unittest.TestCase):
