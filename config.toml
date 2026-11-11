@@ -1,7 +1,7 @@
-target_c = 75.0
-gain = 0.1
-sample_interval = 1.0
-load_period = 0.25
+target_c = 55.0
+gain = 0.05
+sample_interval = 5.0
+load_period = 0.005
 
 # workers = 4
-# sensor_path = "/sys/class/hwmon/hwmon0/temp1_input"
+sensor_path = "/sys/class/hwmon/hwmon0/temp1_input"
