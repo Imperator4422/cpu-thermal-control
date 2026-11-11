@@ -21,6 +21,7 @@ _PR_SET_PDEATHSIG = 1
 class Config:
     target_c: float
     gain: float
+    integral_gain: float
     sample_interval: float
     load_period: float
     workers: int
@@ -36,16 +37,20 @@ def available_cpus():
 def load_config(path):
     with open(path, "rb") as file:
         data = tomllib.load(file)
-    allowed = {"target_c", "gain", "sample_interval", "load_period", "workers", "sensor_path"}
+    allowed = {
+        "target_c", "gain", "integral_gain", "sample_interval", "load_period",
+        "workers", "sensor_path",
+    }
     unknown = data.keys() - allowed
     if unknown:
         raise ValueError(f"unknown configuration keys: {', '.join(sorted(unknown))}")
 
-    def number(key, default, minimum, maximum=None):
+    def number(key, default, minimum, maximum=None, minimum_inclusive=False):
         value = data.get(key, default)
         try:
             valid = (not isinstance(value, bool) and isinstance(value, (int, float))
-                     and math.isfinite(value) and value > minimum
+                     and math.isfinite(value)
+                     and (value >= minimum if minimum_inclusive else value > minimum)
                      and (maximum is None or value <= maximum))
         except OverflowError:
             valid = False
@@ -55,6 +60,7 @@ def load_config(path):
 
     target = number("target_c", 75.0, 0, 120)
     gain = number("gain", 0.1, 0)
+    integral_gain = number("integral_gain", 0.001, 0, minimum_inclusive=True)
     sample_interval = number("sample_interval", 1.0, 0)
     load_period = number("load_period", 0.25, 0)
     workers = data.get("workers", available_cpus())
@@ -63,7 +69,7 @@ def load_config(path):
     sensor_path = data.get("sensor_path")
     if sensor_path is not None and (not isinstance(sensor_path, str) or not sensor_path):
         raise ValueError("sensor_path must be a non-empty string")
-    return Config(target, gain, sample_interval, load_period, workers, sensor_path)
+    return Config(target, gain, integral_gain, sample_interval, load_period, workers, sensor_path)
 
 
 def _read_text(path):
@@ -124,6 +130,28 @@ def proportional_load(target_c, temperature_c, gain):
     return max(0.0, min(1.0, gain * (target_c - temperature_c)))
 
 
+class PIController:
+    def __init__(self, proportional_gain, integral_gain):
+        self.proportional_gain = proportional_gain
+        self.integral_gain = integral_gain
+        self.integral_error = 0.0
+
+    def update(self, target_c, temperature_c, elapsed):
+        if not math.isfinite(elapsed) or elapsed < 0:
+            raise ValueError(f"invalid elapsed time: {elapsed!r}")
+
+        error = target_c - temperature_c
+        candidate_integral = self.integral_error + error * elapsed
+        output = self.proportional_gain * error + self.integral_gain * candidate_integral
+        if (0 <= output <= 1 or (output > 1 and error < 0)
+                or (output < 0 and error > 0)):
+            self.integral_error = candidate_integral
+        else:
+            output = (self.proportional_gain * error
+                      + self.integral_gain * self.integral_error)
+        return max(0.0, min(1.0, output))
+
+
 def _set_parent_death_signal(parent_pid):
     libc = ctypes.CDLL(None, use_errno=True)
     prctl = libc.prctl
@@ -160,6 +188,7 @@ def load_worker(duty, stop, period, parent_pid):
 def run(config):
     sensors = [Path(config.sensor_path)] if config.sensor_path else discover_sensors()
     print("CPU sensor(s): " + ", ".join(map(str, sensors)), flush=True)
+    controller = PIController(config.gain, config.integral_gain)
     context = multiprocessing.get_context("fork")
     duty = context.Value("d", 0.0)
     stop = context.Event()
@@ -170,11 +199,14 @@ def run(config):
                 target=load_worker, args=(duty, stop, config.load_period, os.getpid()))
             worker.start()
             workers.append(worker)
+        last_sample = time.monotonic()
         while True:
             if any(not worker.is_alive() for worker in workers):
                 raise RuntimeError("CPU load worker exited unexpectedly")
             temperature = read_temperature(sensors)
-            fraction = proportional_load(config.target_c, temperature, config.gain)
+            now = time.monotonic()
+            fraction = controller.update(config.target_c, temperature, now - last_sample)
+            last_sample = now
             with duty.get_lock():
                 duty.value = fraction
             print(f"CPU: {temperature:.1f} C  target: {config.target_c:.1f} C  load: {fraction:.0%}",
