@@ -1,7 +1,7 @@
 target_c = 55.0
-gain = 0.05
-integral_gain = 0.001
-sample_interval = 5.0
+gain = 0.005
+integral_gain = 0.0005
+sample_interval = 1.0
 load_period = 0.005
 log_to_console = true
 
