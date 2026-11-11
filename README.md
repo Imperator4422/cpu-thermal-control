@@ -25,14 +25,18 @@ Configuration keys:
 | --- | --- | --- |
 | `target_c` | 75.0 | Target temperature in Celsius (above 0 and at most 120). |
 | `gain` | 0.1 | Fractional load per degree below target, greater than zero. |
+| `integral_gain` | 0.001 | Fractional load per degree-second of accumulated temperature error; zero disables integral control. |
 | `sample_interval` | 1.0 | Seconds between temperature readings. |
 | `load_period` | 0.25 | Seconds per worker's load duty cycle. |
 | `workers` | Available CPUs | Number of load processes; defaults to the process's CPU affinity count. |
 | `sensor_path` | Automatic | Optional path to one CPU temperature sensor. |
 
-Load is `clamp(gain * (target_c - measured_c), 0, 1)` per worker. The controller
-can add heat but cannot cool the CPU below its idle temperature. It may settle
-below the target because proportional control needs an error to produce load.
-Other workloads, cooling, frequency scaling, and thermal throttling affect the
-result. Monitor the machine and choose a safe target for your hardware; this is
-not a replacement for hardware thermal protection.
+Load is `clamp(gain * error + integral_gain * accumulated_error, 0, 1)` per
+worker, where `error = target_c - measured_c` and accumulated error is the
+time-integral of the temperature error in degree-seconds. Integral accumulation
+is paused when the load is saturated and the error would push it farther into
+saturation. The controller can add heat but cannot cool the CPU below its idle
+temperature. Other workloads, cooling, frequency scaling, and thermal
+throttling affect the result.
+Monitor the machine and choose a safe target for your hardware; this is not a
+replacement for hardware thermal protection.

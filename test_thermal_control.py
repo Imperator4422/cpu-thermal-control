@@ -19,12 +19,39 @@ class ProportionalControlTests(unittest.TestCase):
             path.write_text('target_c = 70\nworkers = 2\nsensor_path = "/tmp/cpu"\n')
             config = control.load_config(path)
             self.assertEqual((config.target_c, config.workers, config.sensor_path), (70, 2, "/tmp/cpu"))
+            self.assertEqual(config.integral_gain, 0.001)
+            path.write_text('integral_gain = 0\n')
+            self.assertEqual(control.load_config(path).integral_gain, 0)
             for content in ('workers = 0', 'gain = nan', 'sample_interval = 0',
                             'target_c = 121', 'sensor_path = ""', 'unknown = 1'):
                 with self.subTest(content=content):
                     path.write_text(content)
                     with self.assertRaises(ValueError):
                         control.load_config(path)
+            for content in ('integral_gain = -0.1', 'integral_gain = nan',
+                            'integral_gain = true'):
+                with self.subTest(content=content):
+                    path.write_text(content)
+                    with self.assertRaises(ValueError):
+                        control.load_config(path)
+
+
+class PIControllerTests(unittest.TestCase):
+    def test_integral_term_accumulates_with_elapsed_time(self):
+        controller = control.PIController(0.05, 0.01)
+        self.assertAlmostEqual(controller.update(75, 65, 2), 0.7)
+        self.assertAlmostEqual(controller.update(75, 65, 2), 0.9)
+
+    def test_integral_term_does_not_wind_up_at_load_limit(self):
+        controller = control.PIController(0.2, 0.01)
+        self.assertEqual(controller.update(75, 65, 10), 1)
+        self.assertEqual(controller.integral_error, 0)
+        self.assertEqual(controller.update(75, 65, 10), 1)
+        self.assertEqual(controller.integral_error, 0)
+
+    def test_zero_integral_gain_preserves_proportional_control(self):
+        controller = control.PIController(0.1, 0)
+        self.assertAlmostEqual(controller.update(75, 70, 10), 0.5)
 
 
 class WorkerLifecycleTests(unittest.TestCase):
