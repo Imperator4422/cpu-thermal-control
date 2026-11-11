@@ -39,9 +39,13 @@ def load_config(path):
 
     def number(key, default, minimum, maximum=None):
         value = data.get(key, default)
-        if (isinstance(value, bool) or not isinstance(value, (int, float))
-                or not math.isfinite(value) or value <= minimum
-                or (maximum is not None and value > maximum)):
+        try:
+            valid = (not isinstance(value, bool) and isinstance(value, (int, float))
+                     and math.isfinite(value) and value > minimum
+                     and (maximum is None or value <= maximum))
+        except OverflowError:
+            valid = False
+        if not valid:
             raise ValueError(f"invalid {key}: {value!r}")
         return float(value)
 
